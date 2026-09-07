@@ -1,0 +1,69 @@
+name: Update LaLiga report
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: laliga-report-update
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      refresh_outcome: ${{ steps.refresh.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refresh LaLiga data
+        id: refresh
+        if: github.event_name != 'push'
+        continue-on-error: true
+        run: python laliga-report-server.py --refresh-once
+      - name: Update embedded snapshot
+        run: python build-laliga-report.py
+      - name: Commit changed snapshot
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add report-assets/laliga-report.json report-assets/laliga-cache.json 2026-2027-laliga-second-yellow-report.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update LaLiga report'
+            git push
+          fi
+      - name: Prepare public files
+        run: |
+          mkdir -p _site/report-assets
+          cp 2026-2027-laliga-second-yellow-report.html _site/
+          cp 2026-2027-laliga-second-yellow-report.html _site/index.html
+          cp report-assets/laliga-report.json report-assets/laliga-logo.png _site/report-assets/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: refresh
+    if: always() && needs.refresh.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy public report
+        id: deployment
+        uses: actions/deploy-pages@v4
+  check-refresh:
+    needs: [refresh, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Surface refresh failure
+        if: needs.refresh.outputs.refresh_outcome == 'failure'
+        run: exit 1
